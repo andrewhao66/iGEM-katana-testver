@@ -275,6 +275,90 @@ def main() -> int:
                     failures.append(f"SBOL: output is not valid UTF-8 ({e})")
                     print(f"   FAIL output is not valid UTF-8 ({e})")
 
+    # ── 6. BARE RUN — the adversarial suite is runnable without arguments ───
+    # test_seal_gaps.py takes the library directory as argv[1], and verify.py passes it
+    # explicitly. Run bare it used to resolve BASE to "." — the repo root, which holds no
+    # LOCK.tsv — and died on a FileNotFoundError traceback that reads like library
+    # corruption rather than a usage mistake. The suite is the evidence the verifier works;
+    # a stranger running it directly must not be told the library is broken when it is not.
+    print("\n6. BARE RUN — test_seal_gaps.py with no arguments")
+    _suite = HERE / "test_seal_gaps.py"
+    if not _suite.exists():
+        print("   SKIP test_seal_gaps.py not in this bundle")
+    else:
+        _p = subprocess.run([sys.executable, str(_suite)], cwd=str(HERE),
+                            capture_output=True, text=True, encoding="utf-8",
+                            errors="replace")
+        _out = (_p.stdout or "") + (_p.stderr or "")
+        if "Traceback" in _out:
+            failures.append("bare run of test_seal_gaps.py raised a traceback")
+            print("   FAIL raised a traceback instead of running or explaining itself")
+        elif _p.returncode != 0:
+            failures.append(f"bare run of test_seal_gaps.py exited {_p.returncode}")
+            print(f"   FAIL exited {_p.returncode}")
+        elif "8/8 checks passed" not in _out:
+            failures.append("bare run of test_seal_gaps.py did not report 8/8")
+            print("   FAIL did not report 8/8 checks passed")
+        else:
+            passed += 1
+            print("   PASS bare run reports 8/8 with no traceback")
+
+    # ── 7. HASH AGREEMENT — the duplicated seq_sha256 has not drifted ───────
+    # add_part.py:63 documents its own duplication as load-bearing: "Deliberately identical
+    # to katana_build.seq_sha256. If these two ever drift, every part this tool admits
+    # becomes unbuildable." Nothing enforced that. A comment is not a guard, and the two
+    # functions do not even share a signature — katana_build's takes a topology argument
+    # that all four of its call sites pass as "linear" and that the body ignores.
+    #
+    # This section is a regression guard, so it passes the first time it runs. That is why
+    # it ends with a negative control: a deliberately drifted hash must be CAUGHT, or the
+    # equality assertions above it prove nothing. Same reason verify.py tries to break
+    # itself after reporting SEALED.
+    print("\n7. HASH AGREEMENT — add_part.seq_sha256 vs katana_build.seq_sha256")
+    try:
+        import hashlib as _hl
+
+        import add_part as _ap
+        import katana_build as _kb
+
+        _battery = ["ATGC", "atgc", "AtGc", "NRYKMSWBDHV", "nrykmswbdhv",
+                    "", "ATGC" * 250, "A", "atgcATGCnnNN"]
+        _drift = [s for s in _battery if _ap.seq_sha256(s) != _kb.seq_sha256(s)]
+        if _drift:
+            failures.append(f"seq_sha256 disagree on {len(_drift)} input(s): {_drift[:3]}")
+            print(f"   FAIL disagree on {len(_drift)} of {len(_battery)} inputs")
+        else:
+            passed += 1
+            print(f"   PASS identical across {len(_battery)} inputs")
+
+        # Pin the documented convention: topology is NOT part of the hash. Adopting the
+        # KATANA_SPEC v2 §3.4 tag must break this line and force a deliberate re-seal,
+        # rather than silently changing what every sealed part hashes to.
+        _topo = [s for s in _battery
+                 if _kb.seq_sha256(s) != _kb.seq_sha256(s, "circular")]
+        if _topo:
+            failures.append("katana_build.seq_sha256 now varies with topology — "
+                            "every sealed part's hash is affected; re-seal deliberately")
+            print(f"   FAIL topology changed the hash for {len(_topo)} input(s)")
+        else:
+            passed += 1
+            print("   PASS topology is not part of the hash (convention pinned)")
+
+        # Negative control: this is what drift looks like. If it is NOT caught, the two
+        # checks above are vacuous.
+        def _drifted(seq: str) -> str:          # missing the .upper() the canon applies
+            return _hl.sha256(seq.encode("ascii")).hexdigest()
+
+        if any(_drifted(s) != _ap.seq_sha256(s) for s in ("atgc", "AtGc")):
+            passed += 1
+            print("   PASS a drifted hash is caught (the check above can fail)")
+        else:
+            failures.append("negative control did not fire — the agreement check is vacuous")
+            print("   FAIL negative control did not fire")
+    except Exception as e:
+        failures.append(f"hash agreement section could not run: {e!r}")
+        print(f"   FAIL could not run: {e!r}")
+
     # ── verdict ─────────────────────────────────────────────────────────────
     print("\n" + "─" * 60)
     if failures:

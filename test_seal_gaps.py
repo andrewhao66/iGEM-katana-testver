@@ -4,9 +4,18 @@ Runs each case on a throwaway copy of the (already migrated) library dir."""
 import os, sys, shutil, subprocess, tempfile
 import katana_lock as K
 
-BASE=sys.argv[1] if len(sys.argv)>1 else "."
+HERE=os.path.dirname(os.path.abspath(__file__))
+# Default to the library this repository ships. This used to default to "." — the repo
+# root, which holds no LOCK.tsv — so a bare run died on a FileNotFoundError traceback that
+# reads like library corruption rather than a usage mistake. verify.py passes the path
+# explicitly (run(SUITE, str(LIB))) and is unaffected either way.
+BASE=sys.argv[1] if len(sys.argv)>1 else os.path.join(HERE,"parts-library","ref_parts")
 BASE=os.path.abspath(BASE)
-VER=os.path.join(os.path.dirname(os.path.abspath(__file__)),"verify_library_v2.py")
+VER=os.path.join(HERE,"verify_library_v2.py")
+if not os.path.isfile(os.path.join(BASE,"LOCK.tsv")):
+    sys.exit(f"No LOCK.tsv in {BASE}\n"
+             f"usage: {os.path.basename(__file__)} [LIBRARY_DIR]"
+             f"   (default: parts-library/ref_parts)")
 
 def run_verify(d):
     r=subprocess.run([sys.executable, VER, os.path.join(d,"LOCK.tsv")],
