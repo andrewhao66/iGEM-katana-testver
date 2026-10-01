@@ -14,6 +14,8 @@
 #   minimal       the engine works with ONLY its required dependency installed
 #   kagami        the auditor a stranger is invited to run still works on a bare machine
 #                 (no blastn: an annotated file is still checked by exact match)
+#   bootstrap     the setup script works before anything is installed, and reads its pins
+#                 from requirements.txt instead of keeping a second copy of them
 #
 # `minimal` exists because the other two install everything. Optional extras are
 # supposed to degrade to a loud warning, never a crash — and the only way to know
@@ -50,10 +52,15 @@ determinism:
 
 # No extras. Proves the near-stdlib claim: the engine must still build a construct
 # with only PyYAML present, warning about the gates it cannot run instead of dying.
+#
+# The pin is ASKED FOR, not restated. This job used to install the literal "PyYAML==6.0.2",
+# so bumping requirements.txt would have left CI quietly testing the old version — the same
+# defect as two seq_sha256 functions with nothing asserting they agree. bootstrap.py reads
+# requirements.txt and needs nothing installed to answer, so it runs on a bare image.
 minimal-deps:
   stage: test
   script:
-    - pip install --no-cache-dir "PyYAML==6.0.2"
+    - pip install --no-cache-dir $(python bootstrap.py --print-required)
     - python test_determinism.py
 
 # Kagami is the tool the wiki invites a visitor to download and run, and until this job
@@ -68,3 +75,14 @@ kagami:
   script:
     - cd kagami
     - python tests.py
+
+# bootstrap.py is the first thing a stranger runs, so it must work before anything is
+# installed. This job deliberately installs NOTHING: the suite is standard library only,
+# because a test that needs pip cannot check an installer. It covers the pure functions —
+# the version floor, parsing requirements.txt rather than copying its pins, and the
+# per-platform BLAST+ pointer. Creating a venv and running pip are not exercised here;
+# that is checked by running bootstrap.py on a clean clone, recorded in the commit.
+bootstrap:
+  stage: test
+  script:
+    - python test_bootstrap.py

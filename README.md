@@ -41,11 +41,26 @@ The second half is the point. Anyone can print "verified".
 
 ## Install, run, reproduce
 
-**Install.** Python 3.9 or newer. The engine core needs exactly one thing, a YAML parser:
+**Install.** Python 3.9 or newer. One command does the whole thing:
 
 ```
-pip install -r requirements.txt
+python3 bootstrap.py
 ```
+
+It checks your Python version, makes a `.venv` here, installs the one hard requirement into it,
+names any optional feature that is therefore switched off and what that costs you, says whether
+BLAST+ is on your `PATH` and how to get it if not — and finishes by running `verify.py`, because
+"installed" is a claim and `8/8 SEALED` is evidence. Add `--with-optional` for the two extras.
+
+By hand instead, if you prefer:
+
+```
+python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
+```
+
+**Use a virtual environment either way.** `requirements.txt` is a set of exact pins. Run against a
+system-wide Python they will silently downgrade packages for every other project on that machine.
+`bootstrap.py` only ever installs into the `.venv` it makes here, so it cannot do this to you.
 
 That file also pins two optional extras — codon tables for the dry-lab gate, and `sbol3` for SBOL
 export. The engine runs fine without either; it just tells you, loudly, which checks it therefore
