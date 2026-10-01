@@ -22,6 +22,14 @@ Usage:
   py katana_build.py specs/pSense-Nit-dual.spec.yaml --oracle f93cd751...
   py katana_build.py specs/pSense-Lac-dual.spec.yaml --gibson-overlap 30
 """
+# Required on Python 3.9, which the README promises and macOS still ships. Line 168 annotates
+# a default as `str | None`, and without this the module dies at IMPORT with
+# "TypeError: unsupported operand type(s) for |" — so the engine did not run at all, not even
+# --help. CI never saw it because it runs python:3.12. Every other module here already has
+# this line; this one was missed. It changes annotation evaluation only, never behaviour: the
+# construct fingerprint is unchanged.
+from __future__ import annotations
+
 import argparse, hashlib, re, sys, textwrap, csv, io
 from pathlib import Path
 from datetime import datetime

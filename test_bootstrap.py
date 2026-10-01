@@ -97,6 +97,20 @@ check("it is the PyYAML pin from the file", specs == ["PyYAML==6.0.2"], specs)
 check("no optional package leaks in",
       not any(n in " ".join(specs) for n in ("sbol3", "codon")), specs)
 
+# ── the engine must be importable, not merely version-compatible ────────────
+# katana_build.py annotated a default as `str | None` without
+# `from __future__ import annotations`, so on Python 3.9 — which the README promises and
+# macOS still ships — it died at IMPORT, before --help. CI runs python:3.12 and never saw it.
+# A version number that looks fine is not evidence the engine runs, which is the same mistake
+# a8d8b78 removed from the audit: never report a clean verdict for a check that did not run.
+print("\n6. Engine smoke check")
+cmd = B.engine_smoke_cmd("/somewhere/python", HERE)
+check("the command runs the given interpreter", cmd[0] == "/somewhere/python", cmd)
+check("it imports the build engine", "katana_build" in " ".join(cmd), cmd)
+check("it is a -c import, not a full build", "-c" in cmd, cmd)
+ran, detail = B.engine_smoke(sys.executable, HERE)
+check("the engine imports under this interpreter", ran, detail)
+
 # ── verdict ────────────────────────────────────────────────────────────────
 n = sum(1 for _, c in results if c)
 print(f"\n{n}/{len(results)} passed")

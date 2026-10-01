@@ -120,6 +120,28 @@ def required_specs(plan: "list[dict]") -> "list[str]":
     return [f"{d['name']}=={d['pin']}" for d in plan if d["required"]]
 
 
+def engine_smoke_cmd(py: str, root) -> "list[str]":
+    """The command that proves the build engine can be imported at all.
+
+    Separate from the version check on purpose. katana_build.py annotated a default as
+    `str | None` without `from __future__ import annotations`, so under Python 3.9 — the
+    floor this project promises, and what macOS still ships — it raised TypeError at IMPORT,
+    before even --help. The version number was fine; the engine did not run. Checking the
+    number and reporting success would be the same mistake a8d8b78 removed from the audit:
+    never report a clean verdict for a check that did not run.
+    """
+    return [str(py), "-c", "import sys; sys.path.insert(0, %r); import katana_build" % str(root)]
+
+
+def engine_smoke(py: str, root) -> "tuple[bool, str]":
+    """Run engine_smoke_cmd and report whether the engine imported, with the reason if not."""
+    r = subprocess.run(engine_smoke_cmd(py, root), capture_output=True, text=True)
+    if r.returncode == 0:
+        return True, "katana_build imports"
+    tail = (r.stderr or r.stdout or "").strip().splitlines()
+    return False, (tail[-1] if tail else f"exit {r.returncode}")
+
+
 def blast_hint(platform_key: str) -> str:
     """Per-platform BLAST+ guidance.
 
@@ -243,10 +265,24 @@ def main() -> int:
         return 0
 
     print("\n" + "─" * 42)
-    print("Proving it works — running verify.py…\n")
+    # Two pieces of evidence, not one. verify.py proves the library is intact; it imports no
+    # part of the build engine, so it would have passed on a machine where katana_build could
+    # not even be imported — which is exactly what Python 3.9 did until that was fixed.
+    eng_ok, eng_why = engine_smoke(py, HERE)
+    print(f"engine    {'imports' if eng_ok else 'DOES NOT IMPORT'}")
+    if not eng_ok:
+        print(f"  {eng_why}")
+        print("  The library check below may still pass — it does not touch the engine — so\n"
+              "  this would otherwise have looked like a working setup. It is not one.")
+
+    print("\nProving it works — running verify.py…\n")
     if run_inheriting([str(py), str(HERE / "verify.py")]) != 0:
         print("\nSetup finished but verify.py did not pass. Do not use the library until\n"
               "you know why; the output above says what did not match.")
+        return 1
+    if not eng_ok:
+        print("\nThe library verifies, but the build engine does not import, so this is NOT\n"
+              "ready. The reason is above.")
         return 1
     print(f"\nReady. Use {py.relative_to(HERE)} , or activate the venv.")
     return 0
