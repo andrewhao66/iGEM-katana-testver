@@ -553,5 +553,157 @@ else:
                           and set(v.upper()) <= set("ACGTN")
                           for p in _spec["parts"] for v in p.values()))
 
+# 20. gui_spec — writing a seal: block into a Spec (S2 milestone 1).
+#      The 63 seal: blocks in the seven shipped Specs were carried there by hand. add_part.py
+#      prints the block so no fingerprint is copied by hand; the printing was automated, the
+#      pasting was not. This is the one piece of new logic in the forward tab, so it is tested
+#      before any window exists.
+import gui_spec                                                          # noqa: E402
+
+_ROOT = os.path.dirname(HERE)
+_LIB = os.path.join(_ROOT, "parts-library", "ref_parts")
+_LOCK = os.path.join(_LIB, "LOCK.tsv")
+
+if not os.path.isfile(_LOCK):
+    check("gui_spec tests (SKIPPED — no parts-library in this bundle)", True)
+else:
+    _entries = gui_spec.read_library(_LOCK)
+    _by_id = {e["id"]: e for e in _entries}
+
+    check("read_library returns every row", len(_entries) == 30)
+    check("entries carry id, version, length, outfile and seq_sha256",
+          all(e.get("id") and e.get("version") and e.get("length")
+              and e.get("outfile") and e.get("seq_sha256") for e in _entries))
+    # Rule 2: a design is specified by ID. The picker must not be able to show bases, so the
+    # entries it is built from must not contain any.
+    check("entries carry NO bases (rule 2)",
+          not any(isinstance(v, str) and len(v) > 40 and set(v.upper()) <= set("ACGTN")
+                  for e in _entries for v in e.values()))
+
+    _e = _by_id.get("B0015")
+    check("B0015 is in the library", _e is not None)
+
+    # The emitted text must be what add_part.py:524-525 prints, character for character, so
+    # that the window and the CLI produce the same artifact rather than two dialects.
+    _blk = gui_spec.seal_block(_e)
+    check("seal_block opens with the add_part wording",
+          _blk.lstrip().startswith('seal:   { status: SEALED, lib: "'))
+    check("seal_block names the manifest's outfile", _e["outfile"] in _blk)
+    check("seal_block carries the 12-char hash and the length",
+          f"seq_sha256_12: {_e['seq_sha256'][:12]}" in _blk
+          and f"length: {_e['length']} }}" in _blk)
+    check("seal_block is two lines", len(_blk.rstrip("\n").split("\n")) == 2)
+    check("seal_block carries no full 64-char hash", _e["seq_sha256"] not in _blk)
+
+    # Rule 3: recompute at the point of use, never trust the row or an earlier check.
+    _v = gui_spec.verify_entry(_LIB, _e)
+    check("verify_entry recomputes and agrees with the manifest", _v["ok"] is True)
+    check("verify_entry reports both readings",
+          _v["computed"] == _v["recorded"] == _e["seq_sha256"])
+
+    # ---- insertion, on throwaway copies ----
+    _SPEC = """\
+id:        demo
+version:   1                   # KEEP ME: a load-bearing comment
+parts:
+  - id: B0015
+    role: terminator
+    class: reference
+  - id: p15A
+    role: backbone             # KEEP ME TOO
+    class: reference
+"""
+
+    def _tmpspec(text=_SPEC):
+        d = tempfile.mkdtemp(prefix="guispec_")
+        p = os.path.join(d, "t.spec.yaml")
+        open(p, "w", encoding="utf-8", newline="\n").write(text)
+        return p
+
+    _p = _tmpspec()
+    _r = gui_spec.insert_seal(_p, "B0015", _by_id["B0015"], _LIB)
+    _after = open(_p, encoding="utf-8").read()
+    check("insert_seal reports it inserted", _r["action"] == "inserted")
+    check("the block landed in the Spec", "seq_sha256_12: " + _by_id["B0015"]["seq_sha256"][:12] in _after)
+    # The Specs' inline comments are load-bearing — pAP-Report-dual's version: line carries the
+    # whole pSC101→pMB1 rationale — and a PyYAML round-trip discards every one of them.
+    check("load-bearing comments survive byte-for-byte",
+          "# KEEP ME: a load-bearing comment" in _after and "# KEEP ME TOO" in _after)
+    check("the block went under B0015, not p15A",
+          _after.index("seq_sha256_12") < _after.index("- id: p15A"))
+
+    # Last part in the list is the position most likely to be got wrong.
+    _p2 = _tmpspec()
+    _r2 = gui_spec.insert_seal(_p2, "p15A", _by_id["p15A"], _LIB)
+    _after2 = open(_p2, encoding="utf-8").read()
+    check("insert_seal handles the LAST part in parts:", _r2["action"] == "inserted")
+    check("the last part's block is present",
+          _by_id["p15A"]["seq_sha256"][:12] in _after2)
+    check("inserting into the last part kept its comment", "# KEEP ME TOO" in _after2)
+
+    # Already sealed, identical -> say so and write nothing.
+    _r3 = gui_spec.insert_seal(_p, "B0015", _by_id["B0015"], _LIB)
+    check("a second identical insert is a no-op", _r3["action"] == "unchanged")
+    check("the no-op did not duplicate the block", _after.count("seq_sha256_12") ==
+          open(_p, encoding="utf-8").read().count("seq_sha256_12"))
+
+    # Already sealed, DIFFERENT -> stop. Rule 4: report both readings, resolve nothing.
+    _p4 = _tmpspec(_SPEC.replace("    class: reference\n  - id: p15A",
+                                 "    class: reference\n    seal:   { status: SEALED, "
+                                 'lib: "wrong.gb",\n'
+                                 "              seq_sha256_12: ffffffffffff, length: 1 }\n"
+                                 "  - id: p15A", 1))
+    _before4 = open(_p4, "rb").read()
+    _r4 = gui_spec.insert_seal(_p4, "B0015", _by_id["B0015"], _LIB)
+    check("a conflicting existing seal STOPS", _r4["action"] == "stopped")
+    check("the conflicting case wrote nothing", open(_p4, "rb").read() == _before4)
+    check("the stop reports both readings",
+          "ffffffffffff" in str(_r4.get("readings")) and
+          _by_id["B0015"]["seq_sha256"][:12] in str(_r4.get("readings")))
+    check("the stop offers no fix", not any(
+        k in str(_r4).lower() for k in ("re-seal", "reseal", "merge", "overwrite")))
+
+    # A tampered part file must stop before anything is written. Rule 3 + rule 4.
+    _tl = tempfile.mkdtemp(prefix="guislib_")
+    for _f in os.listdir(_LIB):
+        _s = os.path.join(_LIB, _f)
+        if os.path.isfile(_s):
+            shutil.copy2(_s, os.path.join(_tl, _f))
+    _gb = os.path.join(_tl, _by_id["B0015"]["outfile"])
+    _txt = open(_gb, encoding="utf-8").read()
+    open(_gb, "w", encoding="utf-8", newline="\n").write(
+        _txt.replace("ORIGIN", "ORIGIN      \n        1 aaaaa", 1))
+    _p5 = _tmpspec()
+    _before5 = open(_p5, "rb").read()
+    _r5 = gui_spec.insert_seal(_p5, "B0015", _by_id["B0015"], _tl)
+    check("a tampered part file STOPS the write", _r5["action"] == "stopped")
+    check("the tampered case wrote nothing", open(_p5, "rb").read() == _before5)
+    check("the tampered stop names both hashes",
+          _r5["readings"].get("computed") != _r5["readings"].get("recorded"))
+
+    # An id that is not in the Spec is a mistake, not something to append blindly.
+    _p6 = _tmpspec()
+    _before6 = open(_p6, "rb").read()
+    _r6 = gui_spec.insert_seal(_p6, "sfGFP", _by_id["sfGFP"], _LIB)
+    check("a part absent from the Spec STOPS", _r6["action"] == "stopped")
+    check("that case wrote nothing", open(_p6, "rb").read() == _before6)
+
+    # The written file must still be YAML. PyYAML is optional here on purpose: kagami/ imports
+    # no third-party module, so the auditor runs on a machine with nothing installed.
+    try:
+        import yaml as _y2
+    except ImportError:
+        _y2 = None
+    if _y2 is None:
+        check("Spec still parses after insertion (SKIPPED — PyYAML not installed)", True)
+    else:
+        _doc = _y2.safe_load(open(_p, encoding="utf-8").read())
+        check("the Spec still parses after insertion", isinstance(_doc, dict))
+        _part = next(p for p in _doc["parts"] if p["id"] == "B0015")
+        check("the inserted seal parses as a mapping", isinstance(_part.get("seal"), dict))
+        check("the parsed seal carries the manifest's values",
+              str(_part["seal"].get("seq_sha256_12")) == _by_id["B0015"]["seq_sha256"][:12]
+              and int(_part["seal"].get("length")) == int(_by_id["B0015"]["length"]))
+
 print(f"\n{PASS} passed, {FAIL} failed")
 sys.exit(1 if FAIL else 0)
