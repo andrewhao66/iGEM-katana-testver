@@ -359,6 +359,56 @@ def main() -> int:
         failures.append(f"hash agreement section could not run: {e!r}")
         print(f"   FAIL could not run: {e!r}")
 
+    # ── 8. MANIFEST READERS — the independent LOCK.tsv parsers still agree ──
+    # katana_lock.read_lock is the shared reader, but most consumers parse LOCK.tsv
+    # themselves. Consolidating them would mean editing a dozen files in a sealed system for
+    # no behavioural gain, so they stay separate and this asserts they do not drift — the same
+    # treatment section 7 gives the deliberately duplicated seq_sha256.
+    print("\n8. MANIFEST READERS — independent LOCK.tsv parsers agree")
+    try:
+        sys.path.insert(0, str(HERE))
+        sys.path.insert(0, str(HERE / "kagami"))
+        import katana_lock as _kl
+        import gui_spec as _gs
+
+        _lock = HERE / "parts-library" / "ref_parts" / "LOCK.tsv"
+        if not _lock.exists():
+            print("   SKIP no parts-library in this bundle")
+        else:
+            _hdr, _rows = _kl.read_lock(str(_lock))
+            _entries = _gs.read_library(str(_lock))
+            if len(_rows) != len(_entries):
+                failures.append(f"readers disagree on row count: "
+                                f"katana_lock {len(_rows)}, gui_spec {len(_entries)}")
+                print(f"   FAIL row counts differ ({len(_rows)} vs {len(_entries)})")
+            else:
+                passed += 1
+                print(f"   PASS both read {len(_rows)} rows")
+
+            _mismatch = [
+                r["id"] for r, e in zip(_rows, _entries)
+                if (r["id"], r["version"], r["seq_sha256"], r["length"], r["outfile"]) !=
+                   (e["id"], e["version"], e["seq_sha256"], e["length"], e["outfile"])]
+            if _mismatch:
+                failures.append(f"readers disagree on {len(_mismatch)} row(s): {_mismatch[:3]}")
+                print(f"   FAIL {len(_mismatch)} row(s) differ")
+            else:
+                passed += 1
+                print("   PASS every id, version, hash, length and outfile matches")
+
+            # Negative control: if the comparison could not fail, the two above prove nothing.
+            _bent = [dict(e) for e in _entries]
+            _bent[0]["seq_sha256"] = "0" * 64
+            if any((r["seq_sha256"] != e["seq_sha256"]) for r, e in zip(_rows, _bent)):
+                passed += 1
+                print("   PASS a bent row is caught (the check above can fail)")
+            else:
+                failures.append("manifest-reader negative control did not fire")
+                print("   FAIL negative control did not fire")
+    except Exception as e:
+        failures.append(f"manifest reader section could not run: {e!r}")
+        print(f"   FAIL could not run: {e!r}")
+
     # ── verdict ─────────────────────────────────────────────────────────────
     print("\n" + "─" * 60)
     if failures:
