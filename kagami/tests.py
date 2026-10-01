@@ -705,6 +705,67 @@ parts:
               str(_part["seal"].get("seq_sha256_12")) == _by_id["B0015"]["seq_sha256"][:12]
               and int(_part["seal"].get("length")) == int(_by_id["B0015"]["length"]))
 
+# 21b. gui_run — the command shown before it runs (S2 milestone 3).
+#      The forward tab drives the shipped CLI tools rather than reimplementing them, so the
+#      command it builds IS the contract. It must use the interpreter already running (the
+#      launchers reject the Microsoft Store placeholder python.exe, and re-resolving "python"
+#      from PATH would throw that work away) and resolve tools from the repository root, since
+#      the launcher runs with the working directory inside kagami/.
+import time                                                               # noqa: E402
+
+import gui_run                                                            # noqa: E402
+
+
+def _raises(fn):
+    try:
+        fn()
+        return False
+    except Exception:
+        return True
+
+
+_c = gui_run.tool_cmd("katana_init.py", ["myproj"])
+check("tool_cmd runs the interpreter we are already on", _c[0] == sys.executable)
+check("tool_cmd resolves the tool under the repository root",
+      _c[1] == os.path.join(_ROOT, "katana_init.py"))
+check("tool_cmd keeps the arguments in order", _c[2:] == ["myproj"])
+check("tool_cmd does not depend on the working directory",
+      os.path.isabs(_c[1]) and gui_run.tool_cmd("verify.py", [])[1] ==
+      os.path.join(_ROOT, "verify.py"))
+check("an unknown tool raises rather than shelling out",
+      _raises(lambda: gui_run.tool_cmd("rm", ["-rf", "/"])))
+
+_prev = gui_run.shell_preview(["/usr/bin/python3", "/a b/add_part.py", "--id", "B0015"])
+check("shell_preview quotes a path containing a space", '"/a b/add_part.py"' in _prev
+      or "'/a b/add_part.py'" in _prev)
+check("shell_preview leaves plain arguments unquoted", "--id B0015" in _prev)
+check("shell_preview is one line", "\n" not in _prev)
+
+# Streaming and cancellation, on a child that outlives a prompt reply.
+_lines, _done = [], []
+_h = gui_run.run_streaming(
+    [sys.executable, "-c", "import time,sys\nfor i in range(50):\n"
+                           "    print('tick', i); sys.stdout.flush(); time.sleep(0.1)"],
+    on_line=_lines.append, on_done=_done.append)
+_t0 = time.time()
+while not _lines and time.time() - _t0 < 5:
+    time.sleep(0.05)
+check("run_streaming delivers output as it arrives", bool(_lines))
+_h.cancel()
+_t0 = time.time()
+while not _done and time.time() - _t0 < 5:
+    time.sleep(0.05)
+check("cancel ends the child", bool(_done))
+check("a cancelled run reports cancelled, never finished",
+      _done and _done[0].get("cancelled") is True and _done[0].get("returncode") != 0)
+
+_lines2, _done2 = [], []
+gui_run.run_streaming([sys.executable, "-c", "print('hi')"],
+                      on_line=_lines2.append, on_done=_done2.append).wait(10)
+check("a clean run reports returncode 0", _done2 and _done2[0]["returncode"] == 0)
+check("a clean run is not marked cancelled", _done2 and _done2[0]["cancelled"] is False)
+
+
 # 21. The window builds with both tabs (S2 milestone 2). Construction only — no mainloop.
 #      Skipped where there is no display, which is every CI runner, so this never turns the
 #      pipeline red for a reason that has nothing to do with the code.
@@ -718,6 +779,7 @@ except Exception as _e:
 
 if _root is not None:
     try:
+        import gui_forward
         import kagami_gui
         _app, _fwd = kagami_gui.build_window(_root)
         _nb = [w for w in _root.winfo_children() if isinstance(w, _tk.ttk.Notebook)]
@@ -738,6 +800,25 @@ if _root is not None:
             check("the forward tab holds no entry it could read bases from",
                   not any(isinstance(w, _tk.Text) and str(w.cget("state")) == "normal"
                           for w in _fwd.out.master.winfo_children()))
+
+            # The step runner shows the command BEFORE running it, and what it shows is what
+            # runs. Checked on verify.py because it needs no arguments and no network.
+            _fwd.step.set("Verify the library")
+            _fwd._on_step()
+            _preview = _fwd.cmd.get()
+            check("choosing a step fills in the command", bool(_preview))
+            check("the command names the shipped tool", "verify.py" in _preview)
+            check("the command uses this interpreter", sys.executable in _preview)
+            check("Run is enabled once a step is chosen",
+                  str(_fwd.run_btn.cget("state")) == "normal")
+            # Every step's command must assemble without raising, including the ones whose
+            # arguments are still blank.
+            _built = []
+            for _lbl in [s[0] for s in gui_forward._STEPS]:
+                _fwd.step.set(_lbl)
+                _fwd._on_step()
+                _built.append(bool(_fwd.cmd.get()))
+            check("every documented step assembles a command", all(_built))
         _root.destroy()
     except Exception as _e:                                   # noqa: BLE001
         check(f"window construction raised {type(_e).__name__}: {_e}", False)

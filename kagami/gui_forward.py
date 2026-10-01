@@ -17,13 +17,30 @@ Two things about this panel are deliberate and should not be "improved" later:
   would have written a false claim into the manifest that verified clean forever after.
 """
 import os
+import queue
 import tkinter as tk
 from tkinter import filedialog, ttk
 
+import gui_run
 import gui_spec
 
 # A quiet wash of colour so the forward tab is not mistaken for the audit tab at a glance.
 _TINT = "#f3f6fb"
+
+# (label, tool, how to build its arguments). The order is the order of the documented flow.
+# Step 4 — writing the seal: block — is not here: it is the one step no CLI tool performs,
+# and it is the "Write seal into Spec" button above.
+_STEPS = [
+    ("1 · Create a library", "katana_init.py", lambda s: [s.get("project") or "my-project"]),
+    ("2 · Find a part in NCBI", "find_part.py", lambda s: [s.get("part") or ""]),
+    ("3 · Admit it to the library", "add_part.py",
+     lambda s: ["--library", s.get("libroot") or "", "--id", s.get("part") or ""]),
+    ("5 · Check the design", "check_design.py", lambda s: [s.get("spec") or ""]),
+    ("6 · Build (dry run)", "katana_build.py",
+     lambda s: [s.get("spec") or "", "--dry-run"]),
+    ("6 · Build for real", "katana_build.py", lambda s: [s.get("spec") or ""]),
+    ("Verify the library", "verify.py", lambda s: []),
+]
 
 
 class ForwardTab:
@@ -31,6 +48,11 @@ class ForwardTab:
         self.root = root
         self.entries = []
         self.lib_dir = None
+        # gui_run's callbacks fire on a worker thread, and Tk widgets must not be touched from
+        # one. Everything crosses on this queue and is read by _drain on the main thread, the
+        # same way the audit panel already does it.
+        self.q = queue.Queue()
+        self.handle = None
 
         outer = ttk.Frame(container, padding=12)
         outer.pack(fill="both", expand=True)
@@ -78,10 +100,32 @@ class ForwardTab:
                                   text="Choose a library first.")
         self.partnote.pack(anchor="w", pady=(8, 0))
 
+        # ---- the CLI steps --------------------------------------------------
+        # These run the shipped tools. The assembled command is SHOWN, and is editable, before
+        # it runs: a coordinate or a --strand can be corrected in place, and what runs stays
+        # the thing the README documents. The window is not a second implementation.
+        runbox = ttk.LabelFrame(outer, text="4 · Run a step", padding=10)
+        runbox.pack(fill="x", pady=(10, 0))
+        r4 = ttk.Frame(runbox); r4.pack(fill="x")
+        self.step = ttk.Combobox(r4, state="readonly", width=34,
+                                 values=[s[0] for s in _STEPS])
+        self.step.pack(side="left")
+        self.step.bind("<<ComboboxSelected>>", self._on_step)
+        self.run_btn = ttk.Button(r4, text="Run", command=self.run_step, state="disabled")
+        self.run_btn.pack(side="left", padx=(12, 0))
+        self.cancel_btn = ttk.Button(r4, text="Cancel", command=self.cancel_step,
+                                     state="disabled")
+        self.cancel_btn.pack(side="left", padx=(8, 0))
+        self.cmd = tk.StringVar()
+        ttk.Entry(runbox, textvariable=self.cmd).pack(fill="x", pady=(8, 0))
+        ttk.Label(runbox, foreground="#555",
+                  text="This exact command will run. Edit it if it is not what you meant — "
+                       "nothing here is hidden from you.").pack(anchor="w", pady=(6, 0))
+
         # ---- what happened --------------------------------------------------
-        # Read-only, and it reports; it is not an editor. state="disabled" after every write
-        # so nothing here can be typed into and mistaken for input.
-        self.out = tk.Text(partbox, height=9, wrap="word", background=_TINT,
+        # Read-only, and it reports; it is not an editor. Left disabled so nothing here can be
+        # typed into and mistaken for input.
+        self.out = tk.Text(outer, height=12, wrap="word", background=_TINT,
                            relief="flat", state="disabled")
         self.out.pack(fill="both", expand=True, pady=(10, 0))
 
@@ -161,6 +205,88 @@ class ForwardTab:
             self.out.insert("end", "\nreadings:\n")
             for k, v in res["readings"].items():
                 self.out.insert("end", f"  {k:<16} {v}\n")
+        self.out.config(state="disabled")
+
+    # ── the CLI steps ──────────────────────────────────────────────────────
+    def _state(self):
+        """Whatever the panel knows, for the step argument builders."""
+        lib = self.lib.get()
+        libroot = os.path.dirname(os.path.dirname(os.path.abspath(lib))) if lib else ""
+        return {"part": self.part.get(), "spec": self.spec.get(),
+                "libroot": os.path.dirname(os.path.abspath(lib)) if lib else "",
+                "project": os.path.basename(libroot) or "my-project"}
+
+    def _on_step(self, _evt=None):
+        label = self.step.get()
+        for lbl, tool, build in _STEPS:
+            if lbl == label:
+                try:
+                    cmd = gui_run.tool_cmd(tool, [a for a in build(self._state()) if a != ""])
+                except ValueError as e:
+                    self.cmd.set("")
+                    self._write(f"[REFUSED] {e}\n")
+                    return
+                self.cmd.set(gui_run.shell_preview(cmd))
+                self.run_btn.config(state="normal")
+                return
+
+    def run_step(self):
+        import shlex
+        try:
+            cmd = shlex.split(self.cmd.get())
+        except ValueError as e:
+            self._write(f"[REFUSED] that command is not parseable: {e}\n")
+            return
+        if not cmd:
+            return
+        self._clear()
+        self._write(f"$ {self.cmd.get()}\n\n")
+        self.run_btn.config(state="disabled")
+        self.cancel_btn.config(state="normal")
+        self.handle = gui_run.run_streaming(
+            cmd,
+            on_line=lambda ln: self.q.put(("line", ln)),
+            on_done=lambda res: self.q.put(("done", res)))
+        self.root.after(80, self._drain)
+
+    def cancel_step(self):
+        if self.handle:
+            self.handle.cancel()
+
+    def _drain(self):
+        try:
+            while True:
+                kind, payload = self.q.get_nowait()
+                if kind == "line":
+                    self._write(payload + "\n")
+                else:
+                    # A cancelled run is reported as cancelled, never as finished. Same rule
+                    # the audit follows: do not report a clean verdict for something that did
+                    # not run.
+                    if payload["cancelled"]:
+                        self._write("\n[CANCELLED] the step was stopped; it did not finish.\n")
+                    elif payload["returncode"] == 0:
+                        self._write("\n[OK] exit 0\n")
+                    else:
+                        self._write(f"\n[EXIT {payload['returncode']}] "
+                                    f"the tool's own output above says why.\n")
+                    self.run_btn.config(state="normal")
+                    self.cancel_btn.config(state="disabled")
+                    self.handle = None
+                    return
+        except queue.Empty:
+            pass
+        self.root.after(80, self._drain)
+
+    def _write(self, text):
+        self.out.config(state="normal")
+        self.out.insert("end", text)
+        self.out.see("end")
+        self.out.config(state="disabled")
+
+    def _clear(self):
+        self.out.config(state="normal")
+        self.out.delete("1.0", "end")
         self.out.config(state="disabled")
 
     def _stop_dialog(self, res):
