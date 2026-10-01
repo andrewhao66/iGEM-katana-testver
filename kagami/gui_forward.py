@@ -27,6 +27,15 @@ import gui_spec
 # A quiet wash of colour so the forward tab is not mistaken for the audit tab at a glance.
 _TINT = "#f3f6fb"
 
+# A filetypes pattern is a GLOB, never a filename. macOS maps each one into an NSOpenPanel
+# allowed-type list, and one it cannot map becomes nil — NSInvalidArgumentException, which is
+# not a Python exception: it aborts the interpreter with SIGABRT and no traceback. ("LOCK
+# manifest", "LOCK.tsv") read perfectly well and killed the window the moment anyone pressed
+# Choose…. They live up here as constants so kagami/tests.py can assert their shape without
+# needing a display.
+LIB_FILETYPES = [("LOCK manifest", "*.tsv"), ("All files", "*")]
+SPEC_FILETYPES = [("Design Spec", ("*.yaml", "*.yml")), ("All files", "*")]
+
 # (label, tool, how to build its arguments). The order is the order of the documented flow.
 # Step 4 — writing the seal: block — is not here: it is the one step no CLI tool performs,
 # and it is the "Write seal into Spec" button above.
@@ -132,8 +141,7 @@ class ForwardTab:
     # ── pickers ────────────────────────────────────────────────────────────
     def pick_lib(self):
         p = filedialog.askopenfilename(title="Choose the library's LOCK.tsv",
-                                       filetypes=[("LOCK manifest", "LOCK.tsv"),
-                                                  ("All files", "*")])
+                                       filetypes=LIB_FILETYPES)
         if not p:
             return
         self.lib.set(p)
@@ -141,8 +149,7 @@ class ForwardTab:
 
     def pick_spec(self):
         p = filedialog.askopenfilename(title="Choose a Design Spec",
-                                       filetypes=[("Design Spec", "*.yaml *.yml"),
-                                                  ("All files", "*")])
+                                       filetypes=SPEC_FILETYPES)
         if p:
             self.spec.set(p)
             self._refresh_button()

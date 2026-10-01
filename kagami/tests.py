@@ -766,6 +766,28 @@ check("a clean run reports returncode 0", _done2 and _done2[0]["returncode"] == 
 check("a clean run is not marked cancelled", _done2 and _done2[0]["cancelled"] is False)
 
 
+# 21c. File-dialog filters must be globs, not filenames.
+#      ("LOCK manifest", "LOCK.tsv") looked reasonable and was not: a filetypes pattern is a
+#      glob, and macOS maps each one into an NSOpenPanel allowed-type list. One it cannot map
+#      becomes nil, and NSInvalidArgumentException ("object cannot be nil") is not a Python
+#      exception — it aborts the interpreter, SIGABRT, exit 134. So the window died the moment
+#      anyone pressed Choose…, with no traceback a user could act on. Needs no display.
+import gui_forward                                                        # noqa: E402
+
+_pats = []
+for _spec in (gui_forward.LIB_FILETYPES, gui_forward.SPEC_FILETYPES):
+    for _label, _pattern in _spec:
+        _group = _pattern if isinstance(_pattern, (list, tuple)) else [_pattern]
+        # A single string may hold several space-separated globs — the audit panel ships
+        # ("FASTA", "*.fna *.fasta *.fa") and works — so split before judging each one.
+        for _one in _group:
+            _pats.extend(str(_one).split())
+check("every file-dialog pattern is a glob, not a filename",
+      all(p == "*" or p == "*.*" or p.startswith("*.") for p in _pats))
+check("the library filter still offers .tsv", "*.tsv" in _pats)
+check("the Spec filter still offers .yaml and .yml", {"*.yaml", "*.yml"} <= set(_pats))
+
+
 # 21. The window builds with both tabs (S2 milestone 2). Construction only — no mainloop.
 #      Skipped where there is no display, which is every CI runner, so this never turns the
 #      pipeline red for a reason that has nothing to do with the code.

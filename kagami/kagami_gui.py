@@ -507,6 +507,16 @@ def build_window(root):
     still opens with audit alone, because the tool a stranger is invited to run must not stop
     working because a newer panel broke.
     """
+    # Breadcrumbs first. The calls that cross into Cocoa — file panels, the clipboard — can
+    # abort the interpreter instead of raising, leaving no traceback at all; this window did
+    # exactly that once and could not be made to do it again. Tracing cannot break the window:
+    # every hook is wrapped and a failure to trace is ignored.
+    try:
+        import gui_trace
+        gui_trace.install(root)
+    except Exception:
+        pass
+
     root.title("Katana — build and audit")
     root.minsize(820, 600)
 
