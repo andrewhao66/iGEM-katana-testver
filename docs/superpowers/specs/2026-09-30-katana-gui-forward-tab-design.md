@@ -44,8 +44,17 @@ check_design.py:161   seal = p.get("seal")
 
 Neither reads `pin`. Measured, feeding a Kagami-drafted Spec to each:
 
-- `check_design.py` — 4 of 4 parts reported `has no seal block`, exit **0**, closing
+- `check_design.py` — 4 of 4 parts reported `has no seal block`, exit **1**, closing
   line "None of this stops you building."
+
+  **CORRECTION (2026-10-01).** An earlier revision of this document said this run exited
+  **0**, and the claim was repeated in the commit messages of 59dd23f and 1d23943. It is
+  wrong. `check_design.py:116` is `return 1 if probs else 0`, and measured directly it
+  exits 1 on this draft and 0 on `specs/pSense-Nit.spec.yaml`. The original reading came
+  from `$?` after a pipeline — `check_design.py … | head -30` reports head's status, not
+  the tool's. The exit code was never the defect. The closing line is: it tells the reader
+  "None of this stops you building" while the problems it has just listed are exactly the
+  ones that make `katana_build.py` BLOCK at Stage-1.
 - `katana_build.py --dry-run` — Stage-1 **BLOCK**,
   `part 'J23116' has no seal/pin — bare id rejected (v2)`.
 

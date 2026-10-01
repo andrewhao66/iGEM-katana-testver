@@ -227,7 +227,11 @@ def resolve_parts(spec: dict, lock: dict) -> dict:
         expected_len = seal.get("length")
 
         if not lib_file or not expected_sha12:
-            sys.exit(f"BLOCK Stage-1: part '{pid}' has no seal/pin — bare id rejected (v2)\n"
+            # Said "seal/pin" for a long time, which implied a pin: key would be accepted.
+            # It is not: line 216 above reads part.get("seal") and nothing in this engine ever
+            # looks at pin:. A Spec drafted by Kagami carried only pin: and was rejected with a
+            # message naming the very key it had supplied.
+            sys.exit(f"BLOCK Stage-1: part '{pid}' has no seal block — bare id rejected (v2)\n"
                      f"       Your Spec names this part but does not say WHICH version of it,\n"
                      f"       so the engine cannot check it is the one you meant.\n"
                      f"       Every part needs a seal block. add_part.py prints the exact one\n"

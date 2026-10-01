@@ -82,12 +82,17 @@ class Report:
     """
 
     def __init__(self):
-        self.items: list[tuple[str, str, str, str]] = []
+        self.items: list[tuple[str, str, str, str, bool]] = []
 
-    def add(self, level: str, what: str, why: str, fix: str) -> None:
-        self.items.append((level, what, why, fix))
+    def add(self, level: str, what: str, why: str, fix: str, blocking: bool = False) -> None:
+        self.items.append((level, what, why, fix, blocking))
 
-    def problem(self, what, why, fix):  self.add("PROBLEM", what, why, fix)
+    # blocking=True means katana_build.py will REFUSE this Spec, not merely disagree with it.
+    # Only the seal problems are marked: a missing or placeholder seal stops the engine at
+    # Stage-1, measured. A missing promoter or RBS is a design opinion and builds fine.
+    def problem(self, what, why, fix, blocking=False):
+        self.add("PROBLEM", what, why, fix, blocking)
+
     def check(self, what, why, fix):    self.add("WORTH A LOOK", what, why, fix)
 
     def render(self, spec_name: str) -> int:
@@ -105,13 +110,23 @@ class Report:
         print(f"  {spec_name}")
         print(f"  {len(probs)} problem(s), {len(looks)} worth a look.")
         print()
-        for level, what, why, fix in probs + looks:
-            print(f"  {level}: {what}")
+        for level, what, why, fix, blocking in probs + looks:
+            print(f"  {level}{' (STOPS THE BUILD)' if blocking else ''}: {what}")
             print(f"      why it matters   {why}")
             print(f"      what to do       {fix}")
             print()
-        print("  None of this stops you building. It is what a lab-mate would say if they read")
-        print("  your design over your shoulder, and you are allowed to disagree with it.")
+        # This line used to be unconditional, and it was false whenever a seal was missing:
+        # katana_build.py BLOCKs at Stage-1 on exactly those, so the reader was told the
+        # opposite of what would happen next. Saying "nothing here stops you" about something
+        # that does is the same failure the audit had before a8d8b78.
+        n_block = sum(1 for i in probs if i[4])
+        if n_block:
+            print(f"  {n_block} of these WILL stop the build — katana_build.py refuses a part it")
+            print("  cannot pin to one exact version. The rest are what a lab-mate would say")
+            print("  reading over your shoulder, and you are allowed to disagree with those.")
+        else:
+            print("  None of this stops you building. It is what a lab-mate would say if they read")
+            print("  your design over your shoulder, and you are allowed to disagree with it.")
         print()
         return 1 if probs else 0
 
@@ -160,10 +175,25 @@ def analyse(spec: dict, rep: Report) -> None:
     for pid, p in by_id.items():
         seal = p.get("seal")
         if not seal:
-            rep.problem(f"'{pid}' has no seal block.",
-                        "Without it the engine cannot tell which version of the part you mean, "
-                        "so it refuses to build.",
-                        f"Run  python find_part.py {pid}  and paste the seal block it prints.")
+            # UNRESOLVED_* ids come from Kagami: a block it could not match to any reference.
+            # Telling the reader to run find_part.py on one is advice that cannot work — there
+            # is no public record under that name, because the name was invented to say so.
+            if pid.startswith("UNRESOLVED_"):
+                rep.problem(f"'{pid}' has no seal block, and no primary source either.",
+                            "Kagami could not match this block to any reference part, so it was "
+                            "given a placeholder name. A part with no independent source cannot "
+                            "be sealed, and the engine refuses to build without a seal.",
+                            "Identify what this stretch actually is, fetch it from its primary "
+                            "source with add_part.py, then replace this id with the real one. "
+                            "find_part.py cannot help here — there is no record under this name.",
+                            blocking=True)
+            else:
+                rep.problem(f"'{pid}' has no seal block.",
+                            "Without it the engine cannot tell which version of the part you "
+                            "mean, so it refuses to build.",
+                            f"Run  python find_part.py {pid}  and paste the seal block it "
+                            f"prints.",
+                            blocking=True)
         elif isinstance(seal, dict):
             # Look INSIDE the block. Checking only that one exists let the starter template -
             # the first Spec a beginner opens - report "nothing to report" while carrying
@@ -180,15 +210,16 @@ def analyse(spec: dict, rep: Report) -> None:
                             "stop at Stage 1. Nothing is broken - this part just has not been "
                             "filled in.",
                             f"Add the part with add_part.py, or if you already hold it run  "
-                            f"python find_part.py {pid} --seal  and paste what it prints.")
+                            f"python find_part.py {pid} --seal  and paste what it "
+                            f"prints.", blocking=True)
             else:
                 if not (len(pin) == 12 and all(c in "0123456789abcdefABCDEF" for c in pin)):
                     rep.problem(f"'{pid}' has a seq_sha256_12 that is not a 12-character "
                                 f"fingerprint: '{pin}'.",
                                 "That value is how the engine confirms it loaded the part you "
                                 "meant. A malformed one cannot match anything, so the build stops.",
-                                f"Run  python find_part.py {pid} --seal  and copy the value it "
-                                f"prints.")
+                                f"Run  python find_part.py {pid} --seal  and copy the "
+                                f"value it prints.", blocking=True)
                 try:
                     n = int(length)
                 except (TypeError, ValueError):
@@ -198,8 +229,8 @@ def analyse(spec: dict, rep: Report) -> None:
                                 "A part with no length is not a part. The engine checks the "
                                 "sequence it loads against this number, so it must be the real "
                                 "one.",
-                                f"Run  python find_part.py {pid} --seal  and copy the length it "
-                                f"prints.")
+                                f"Run  python find_part.py {pid} --seal  and copy the length "
+                                f"it prints.", blocking=True)
                 if not lib:
                     rep.check(f"'{pid}' has no lib: filename in its seal block.",
                               "The engine can usually find the part from the manifest anyway, but "

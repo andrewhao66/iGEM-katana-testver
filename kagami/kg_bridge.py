@@ -91,7 +91,8 @@ def draft_spec(record, blocks, findings, vendor="Twist"):
     lines.append("  host_context: E_coli_MG1655")
     lines.append("  output_gate:  acoustic-only")
     lines.append("")
-    lines.append("parts:                        # ORDERED; pins added at intake (id@version@seq_sha12)")
+    lines.append("parts:                        # ORDERED; each part's seal: block is written "
+                 "at intake")
     order = []
     for b in blocks:
         role = b.ident_role or b.claim_role or "misc"
@@ -109,7 +110,14 @@ def draft_spec(record, blocks, findings, vendor="Twist"):
             lines.append(f"  - id: {pid}")
             lines.append(f"    role: {role}")
             lines.append("    class: reference")
-            lines.append("    pin: TBD@v1@TBD")
+            # NOT a pin: key. Nothing reads one — katana_build.py and check_design.py both
+            # read seal: and only seal: — so emitting pin: left the reader with a field that
+            # looked filled in, was ignored by every tool, and still had to be replaced by
+            # hand with a seal: block after intake. A comment is honest: this part has no
+            # seal yet because it has not been through the intake gate, and it must not be
+            # sealed from the construct this was recovered from.
+            lines.append("    # seal: goes here, written by the library at intake "
+                         "(NOT from this construct)")
             lines.append(f"    source: {src}{note}")
             order.append(pid)
         else:
