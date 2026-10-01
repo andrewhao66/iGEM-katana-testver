@@ -705,5 +705,46 @@ parts:
               str(_part["seal"].get("seq_sha256_12")) == _by_id["B0015"]["seq_sha256"][:12]
               and int(_part["seal"].get("length")) == int(_by_id["B0015"]["length"]))
 
+# 21. The window builds with both tabs (S2 milestone 2). Construction only — no mainloop.
+#      Skipped where there is no display, which is every CI runner, so this never turns the
+#      pipeline red for a reason that has nothing to do with the code.
+try:
+    import tkinter as _tk
+    _root = _tk.Tk()
+    _root.withdraw()
+except Exception as _e:
+    _root = None
+    check(f"window construction (SKIPPED — no display: {type(_e).__name__})", True)
+
+if _root is not None:
+    try:
+        import kagami_gui
+        _app, _fwd = kagami_gui.build_window(_root)
+        _nb = [w for w in _root.winfo_children() if isinstance(w, _tk.ttk.Notebook)]
+        check("the window holds exactly one notebook", len(_nb) == 1)
+        check("it has two tabs", len(_nb[0].tabs()) == 2 if _nb else False)
+        _titles = [_nb[0].tab(t, "text").strip() for t in _nb[0].tabs()] if _nb else []
+        check("the tabs are the two directions",
+              _titles == ["Audit a sequence", "Build from a Spec"])
+        # The audit panel must be untouched: same attribute the launcher fills when a file is
+        # dragged onto it.
+        check("the audit panel still exposes path", hasattr(_app, "path"))
+        check("the forward tab was created", _fwd is not None)
+
+        if _fwd is not None and os.path.isfile(_LOCK):
+            _fwd.load_lib(_LOCK)
+            check("the forward tab lists the library's parts by ID",
+                  len(_fwd.part.cget("values")) == 30)
+            check("the forward tab holds no entry it could read bases from",
+                  not any(isinstance(w, _tk.Text) and str(w.cget("state")) == "normal"
+                          for w in _fwd.out.master.winfo_children()))
+        _root.destroy()
+    except Exception as _e:                                   # noqa: BLE001
+        check(f"window construction raised {type(_e).__name__}: {_e}", False)
+        try:
+            _root.destroy()
+        except Exception:
+            pass
+
 print(f"\n{PASS} passed, {FAIL} failed")
 sys.exit(1 if FAIL else 0)

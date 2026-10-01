@@ -75,14 +75,19 @@ SEQ_TYPES = [
 
 
 class App:
-    def __init__(self, root):
+    def __init__(self, root, container=None):
         self.root = root
         self.q = queue.Queue()
         self.result = None
-        root.title("Kagami — sequence audit")
-        root.minsize(760, 560)
+        # container lets this whole panel sit inside a notebook tab. Passing nothing keeps the
+        # original behaviour exactly — its own window, its own title — so running
+        # kagami_gui.py directly is unchanged and none of the methods below had to move.
+        if container is None:
+            root.title("Kagami — sequence audit")
+            root.minsize(760, 560)
+            container = root
 
-        outer = ttk.Frame(root, padding=12)
+        outer = ttk.Frame(container, padding=12)
         outer.pack(fill="both", expand=True)
 
         # ---- input -------------------------------------------------------
@@ -491,13 +496,46 @@ class App:
         self.text.configure(state="disabled")
 
 
+def build_window(root):
+    """Both directions in one window. Returns (audit_app, forward_tab).
+
+    Separate from main() so the construction can be smoke-tested without entering mainloop —
+    kagami/tests.py does exactly that when a display is available.
+
+    The audit panel is placed in the first tab unchanged: App grew one optional `container`
+    argument and none of its methods moved. If the forward tab cannot be imported the window
+    still opens with audit alone, because the tool a stranger is invited to run must not stop
+    working because a newer panel broke.
+    """
+    root.title("Katana — build and audit")
+    root.minsize(820, 600)
+
+    nb = ttk.Notebook(root)
+    nb.pack(fill="both", expand=True)
+
+    audit_frame = ttk.Frame(nb)
+    nb.add(audit_frame, text="  Audit a sequence  ")
+    app = App(root, container=audit_frame)
+
+    fwd = None
+    try:
+        import gui_forward
+        build_frame = ttk.Frame(nb)
+        nb.add(build_frame, text="  Build from a Spec  ")
+        fwd = gui_forward.ForwardTab(root, build_frame)
+    except Exception as e:                     # noqa: BLE001 — never lose the audit tab
+        print(f"[kagami] forward tab unavailable: {e!r}", file=sys.stderr)
+
+    return app, fwd
+
+
 def main():
     root = tk.Tk()
     try:
         root.call("tk", "scaling", 1.3)
     except Exception:
         pass
-    app = App(root)
+    app, _fwd = build_window(root)
     # A file dragged onto the launcher, or passed on the command line: fill it in and start.
     # Waiting for the user to press a button they did not ask for would be worse than useless.
     if len(sys.argv) > 1 and os.path.isfile(sys.argv[1]):
